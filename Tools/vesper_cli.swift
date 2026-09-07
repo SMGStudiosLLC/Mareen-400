@@ -106,10 +106,10 @@ struct VesperCLI {
         let r = engine.lastReport
         if wantStats {
             if r.stock == .vesper800 {
-                print(String(format: "stock=vesper800 %dx%d p50=%.3f p90=%.3f dark=%.3f bright=%.3f gain=%.3f wb=%.3f,%.3f flash=%.2f night=%.2f highkey=%.2f seed=%.2f",
+                print(String(format: "stock=vesper800 %ldx%ld p50=%.3f p90=%.3f dark=%.3f bright=%.3f gain=%.3f wb=%.3f,%.3f flash=%.2f night=%.2f highkey=%.2f seed=%.2f",
                              out.width, out.height, r.p50, r.p90, r.darkFrac, r.brightFrac, r.gain, r.wbR, r.wbB, r.flash, r.night, r.highKey, r.seed))
             } else {
-                print(String(format: "stock=marenn400 %dx%d gain=%.3f p50=%.3f", out.width, out.height, r.gain, r.p50))
+                print(String(format: "stock=marenn400 %ldx%ld gain=%.3f p50=%.3f", out.width, out.height, r.gain, r.p50))
             }
         }
         print("\(inPath) -> \(outPath)  \(out.width)x\(out.height)  \(r.stock.rawValue)  gain=\(String(format: "%.3f", r.gain))")

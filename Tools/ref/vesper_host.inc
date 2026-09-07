@@ -188,11 +188,11 @@ bool runVesper(const Options& o, const Raw& in, Raw& out) {
 
     DiffuseP diffuse = defaultDiffuseP();
 
-    PrintP print = defaultPrintP();
-    print.vigAmount *= 1.0f + 0.4f * scene.flash;
-    print.grainAmount *= (1.0f + 0.35f * scene.night) * scene.grainScale;
-    if (o.noGrain) print.grainAmount = 0.0f;
-    print.seed = scene.seed;
+    PrintP printP = defaultPrintP();
+    printP.vigAmount *= 1.0f + 0.4f * scene.flash;
+    printP.grainAmount *= (1.0f + 0.35f * scene.night) * scene.grainScale;
+    if (o.noGrain) printP.grainAmount = 0.0f;
+    printP.seed = scene.seed;
 
     dispatch(w, h, [&](uint2 gid) { vesper_expose(tex<access::read>(src), tex<access::write>(tA), expose, stamp, gid); });
     dumpTexture(o.dumpDir, "expose", tA);
@@ -209,7 +209,7 @@ bool runVesper(const Options& o, const Raw& in, Raw& out) {
     dumpTexture(o.dumpDir, "develop", tB);
     dispatch(w, h, [&](uint2 gid) { vesper_diffuse(tex<access::sample>(tB), tex<access::write>(tA), diffuse, gid); });
     dumpTexture(o.dumpDir, "diffuse", tA);
-    dispatch(w, h, [&](uint2 gid) { vesper_print(tex<access::sample>(tA), tex<access::write>(tFinal), print, gid); });
+    dispatch(w, h, [&](uint2 gid) { vesper_print(tex<access::sample>(tA), tex<access::write>(tFinal), printP, gid); });
 
     storeFinal(tFinal, out);
     if (o.stats) {

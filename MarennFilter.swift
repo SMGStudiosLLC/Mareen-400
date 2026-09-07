@@ -278,6 +278,10 @@ struct DevelopP {
     var skyDark: Float = 0.05
     var chromaGate0: Float = 0.02
     var chromaGate1: Float = 0.08
+    var tealHue: Float = 200
+    var tealSigma: Float = 20
+    var tealShift: Float = 6
+    var tealChroma: Float = 0.85
 }
 
 /// Highlight diffusion and bloom on the developed image, in linear light.
@@ -360,12 +364,14 @@ final class VesperEngine: @unchecked Sendable {
             self.library = vesper
             self.vesperAvailable = true
         } else {
+            let legacy: MTLLibrary
             do {
-                self.library = try device.makeLibrary(source: VesperEngine.prelude + VesperEngine.legacySource, options: nil)
+                legacy = try device.makeLibrary(source: VesperEngine.prelude + VesperEngine.legacySource, options: nil)
             } catch {
                 return nil
             }
-            self.legacyLibrary = self.library
+            self.library = legacy
+            self.legacyLibrary = legacy
             self.vesperAvailable = false
             self.defaultStock = .marenn400
         }
@@ -645,11 +651,11 @@ final class VesperEngine: @unchecked Sendable {
 
         var diffuse = DiffuseP()
 
-        var print = PrintP()
-        print.vigAmount *= 1 + 0.4 * scene.flash
-        print.grainAmount *= (1 + 0.35 * scene.night) * scene.grainScale
-        if !options.grain { print.grainAmount = 0 }
-        print.seed = scene.seed
+        var printP = PrintP()
+        printP.vigAmount *= 1 + 0.4 * scene.flash
+        printP.grainAmount *= (1 + 0.35 * scene.night) * scene.grainScale
+        if !options.grain { printP.grainAmount = 0 }
+        printP.seed = scene.seed
 
         guard let cmd = queue.makeCommandBuffer() else { return nil }
 
@@ -681,7 +687,7 @@ final class VesperEngine: @unchecked Sendable {
             enc.setBytes(&diffuse, length: MemoryLayout<DiffuseP>.stride, index: 0)
         }
         encode(cmd, printPSO, w, h, textures: [tA, tFinal]) { enc in
-            enc.setBytes(&print, length: MemoryLayout<PrintP>.stride, index: 0)
+            enc.setBytes(&printP, length: MemoryLayout<PrintP>.stride, index: 0)
         }
 
         #if os(macOS)
@@ -1145,6 +1151,7 @@ final class VesperEngine: @unchecked Sendable {
         float hlR, hlG, hlB, sat, vibrance, density, hlDesatStart, hlDesatAmt;
         float skinHue, skinSigma, skinPull, skinChroma, skinLift, folHue, folSigma, folShift;
         float folChroma, skyHue, skySigma, skyShift, skyChroma, skyDark, chromaGate0, chromaGate1;
+        float tealHue, tealSigma, tealShift, tealChroma;
     };
     struct DiffuseP { float radiusFrac, radiusMin, softAmt, hiE0, hiE1, bloomI, bloomE0, bloomE1; };
     struct PrintP {
@@ -1455,6 +1462,10 @@ final class VesperEngine: @unchecked Sendable {
         h += wSky * p.skyShift;
         Cn *= 1.0 + wSky * (p.skyChroma - 1.0);
         Lk -= wSky * p.skyDark * min(Cn / 0.2, 1.0);
+
+        float wTeal = gate * hueWeight(h, p.tealHue, p.tealSigma);
+        h += wTeal * p.tealShift;
+        Cn *= 1.0 - wTeal * (1.0 - p.tealChroma);
 
         Lk -= p.density * Cn;
         Cn *= 1.0 - p.hlDesatAmt * smoothstep(p.hlDesatStart, 1.0, Lk);
