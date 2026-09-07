@@ -243,22 +243,22 @@ struct DevelopP {
     var auraR: Float = 1.0
     var auraG: Float = 0.30
     var auraB: Float = 0.08
-    var glare: Float = 0.04
+    var glare: Float = 0.05
     var knee: Float = 0.80
     var clipDesat0: Float = 0.85
     var clipDesat1: Float = 1.6
-    var toeLift: Float = 0.02
+    var toeLift: Float = 0.030
     var shR: Float = -0.020
-    var shG: Float = 0.006
-    var shB: Float = 0.014
-    var midR: Float = 0.016
+    var shG: Float = 0.005
+    var shB: Float = 0.016
+    var midR: Float = 0.026
     var midG: Float = 0.010
-    var midB: Float = -0.024
+    var midB: Float = -0.028
     var hlR: Float = 0.060
     var hlG: Float = -0.006
     var hlB: Float = -0.050
     var sat: Float = 1.05
-    var vibrance: Float = 0.18
+    var vibrance: Float = 0.22
     var density: Float = 0.08
     var hlDesatStart: Float = 0.80
     var hlDesatAmt: Float = 0.5
@@ -269,12 +269,12 @@ struct DevelopP {
     var skinLift: Float = 0.015
     var folHue: Float = 135
     var folSigma: Float = 25
-    var folShift: Float = -12
-    var folChroma: Float = 0.85
+    var folShift: Float = -8
+    var folChroma: Float = 0.90
     var skyHue: Float = 258
     var skySigma: Float = 22
-    var skyShift: Float = -8
-    var skyChroma: Float = 1.25
+    var skyShift: Float = -5
+    var skyChroma: Float = 1.20
     var skyDark: Float = 0.05
     var chromaGate0: Float = 0.02
     var chromaGate1: Float = 0.08
@@ -306,16 +306,16 @@ struct PrintP {
     var caK: Float = 0.00090
     var caB: Float = 0.00090
     var caP: Float = 1.0
-    var grainAmount: Float = 0.045
+    var grainAmount: Float = 0.030
     var grainDiv: Float = 900
     var grainChroma: Float = 0.30
-    var grainFloor: Float = 0.35
+    var grainFloor: Float = 0.55
     var grainMid: Float = 0.80
     var grainBlue: Float = 1.30
     var seed: Float = 0
     var dither: Float = 1.0
     var grainSizeMin: Float = 1.0
-    var grainSharp: Float = 0.0
+    var grainSharp: Float = 0.30
     var pad0: Float = 0
     var pad1: Float = 0
 }
@@ -516,9 +516,9 @@ final class VesperEngine: @unchecked Sendable {
         gain = min(max(gain, 0.72), 1.55)
         let p90Lin = VesperEngine.eotf(s.p90)
         if p90Lin > 0.05 { gain = min(gain, 0.95 / p90Lin) }
-        var flash = VesperEngine.smooth(0.35, 0.6, s.darkFrac) * VesperEngine.smooth(0.02, 0.08, s.brightFrac)
+        var flash = VesperEngine.smooth(0.30, 0.55, s.darkFrac) * VesperEngine.smooth(0.01, 0.04, s.brightFrac)
         if let hint = options.flash { flash = hint ? max(flash, 0.7) : 0 }
-        let night = 1 - VesperEngine.smooth(0.12, 0.30, s.p50)
+        let night = 1 - VesperEngine.smooth(0.10, 0.34, s.p50)
         let highKey = VesperEngine.smooth(0.55, 0.75, s.p50)
         var wbR: Float = 1
         var wbB: Float = 1
@@ -1555,9 +1555,13 @@ final class VesperEngine: @unchecked Sendable {
         float2 fc = float2(gid) + 0.5;
         float2 gc = fc / gsize;
         uint s = uint(max(p.seed, 0.0) * 64.0);
-        float nl = 0.75 * latticeNoise(gc, s) + 0.25 * latticeNoise(gc * 2.0, s + 11u);
-        nl = mix(nl, hash01(gid.x, gid.y, s + 5u) - 0.5, p.grainSharp);
-        float3 nc = float3(latticeNoise(gc, s + 101u), latticeNoise(gc, s + 202u), latticeNoise(gc, s + 303u));
+        // Two octaves of lattice noise, scaled to unit variance, mixed with a
+        // per pixel hash for crispness. grainAmount is then the RMS of the
+        // grain in encoded units at the midtone peak.
+        float nl = (0.75 * latticeNoise(gc, s) + 0.25 * latticeNoise(gc * 2.0, s + 11u)) * 6.5;
+        float sharp = (hash01(gid.x, gid.y, s + 5u) - 0.5) * 3.46;
+        nl = mix(nl, sharp, p.grainSharp);
+        float3 nc = float3(latticeNoise(gc, s + 101u), latticeNoise(gc, s + 202u), latticeNoise(gc, s + 303u)) * 5.2;
         float Yp = lumv(e);
         float mid = 4.0 * Yp * (1.0 - Yp);
         float A = p.grainAmount * (p.grainFloor + (1.0 - p.grainFloor) * pow(max(mid, 0.0), p.grainMid));

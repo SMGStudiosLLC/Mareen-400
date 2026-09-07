@@ -80,9 +80,9 @@ static VesperScene deriveScene(const VesperStats& s, const Options& o) {
     gain = std::min(std::max(gain, 0.72f), 1.55f);
     float p90Lin = eotf(s.p90);
     if (p90Lin > 0.05f) gain = std::min(gain, 0.95f / p90Lin);
-    float flash = smoothF(0.35f, 0.6f, s.darkFrac) * smoothF(0.02f, 0.08f, s.brightFrac);
+    float flash = smoothF(0.30f, 0.55f, s.darkFrac) * smoothF(0.01f, 0.04f, s.brightFrac);
     if (o.flashHint >= 0) flash = o.flashHint ? std::max(flash, 0.7f) : 0.0f;
-    float night = 1.0f - smoothF(0.12f, 0.30f, s.p50);
+    float night = 1.0f - smoothF(0.10f, 0.34f, s.p50);
     float highKey = smoothF(0.55f, 0.75f, s.p50);
     float wbR = 1.0f, wbB = 1.0f;
     if (s.meanR > 0.01f && s.meanG > 0.01f && s.meanB > 0.01f) {
