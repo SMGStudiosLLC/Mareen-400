@@ -15,20 +15,20 @@ mkdir -p "$BUILD"
 python3 "$HERE/extract_msl.py" "$SWIFT" "$BUILD"
 
 CXX="${CXX:-g++}"
-FLAGS=(-std=c++17 -O2 -fsingle-precision-constant -Wno-attributes -Wall -Wno-unused-function -Wno-unused-variable -I"$HERE/shim" -I"$HERE")
+FLAGS=(-std=c++17 -O2 -fsingle-precision-constant -ffp-contract=off -Wno-attributes -Wall -Wno-unused-function -Wno-unused-variable -I"$HERE/shim" -I"$HERE")
 if [[ "${FASTMATH:-0}" == "1" ]]; then FLAGS+=(-ffast-math); fi
 if $CXX -fopenmp -x c++ -c /dev/null -o /dev/null 2>/dev/null; then FLAGS+=(-fopenmp); fi
 
 if [[ -f "$BUILD/source.metal" ]]; then
   # Single-string layout (Marenn 400 as shipped).
-  $CXX "${FLAGS[@]}" -DSTOCK_LEGACY -DMSL_A="\"$BUILD/source.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_marenn400"
+  $CXX "${FLAGS[@]}" -DSTOCK_LEGACY -DMSL_HAS_source -DMSL_A="\"$BUILD/source.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_marenn400"
   echo "built $BUILD/ref_marenn400"
 fi
 if [[ -f "$BUILD/prelude.metal" && -f "$BUILD/legacySource.metal" ]]; then
-  $CXX "${FLAGS[@]}" -DSTOCK_LEGACY -DMSL_A="\"$BUILD/prelude.metal\"" -DMSL_B="\"$BUILD/legacySource.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_marenn400"
+  $CXX "${FLAGS[@]}" -DSTOCK_LEGACY -DMSL_HAS_prelude -DMSL_HAS_legacySource -DMSL_A="\"$BUILD/prelude.metal\"" -DMSL_B="\"$BUILD/legacySource.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_marenn400"
   echo "built $BUILD/ref_marenn400"
 fi
 if [[ -f "$BUILD/prelude.metal" && -f "$BUILD/vesperSource.metal" ]]; then
-  $CXX "${FLAGS[@]}" -DSTOCK_VESPER -DMSL_A="\"$BUILD/prelude.metal\"" -DMSL_B="\"$BUILD/vesperSource.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_vesper800"
+  $CXX "${FLAGS[@]}" -DSTOCK_VESPER -DMSL_HAS_prelude -DMSL_HAS_vesperSource -DMSL_A="\"$BUILD/prelude.metal\"" -DMSL_B="\"$BUILD/vesperSource.metal\"" "$HERE/ref.cpp" -o "$BUILD/ref_vesper800"
   echo "built $BUILD/ref_vesper800"
 fi
