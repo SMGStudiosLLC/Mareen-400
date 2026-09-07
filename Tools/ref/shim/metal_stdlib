@@ -1,0 +1,335 @@
+// metal_stdlib: a CPU stand-in for the subset of the Metal Shading Language
+// standard library that the Vesper 800 and Marenn 400 kernels use.
+//
+// This is deliberately a whitelist, not a general implementation. If a kernel
+// needs something that is missing here, add it only if the real MSL has it
+// with the same name and semantics, otherwise the shader will compile on the
+// CPU and fail on the GPU. Compile with g++ -fsingle-precision-constant so
+// float literals stay float, as they do in MSL.
+//
+// Texture semantics follow the Metal spec for what the kernels rely on:
+// normalized coordinates, texel centers at (i + 0.5) / size, bilinear filtering,
+// clamp_to_edge addressing, unorm8 quantization on write, optional half-float
+// rounding for rgba16Float textures.
+#pragma once
+#include <cmath>
+#include <cstdint>
+#include <cstdlib>
+#include <cstring>
+#include <algorithm>
+#include <vector>
+#include <memory>
+
+#define kernel
+#define constant const
+#define thread
+#define device
+
+namespace metal {
+
+typedef unsigned int uint;
+
+// ---------------------------------------------------------------- vectors
+
+struct uint2 {
+    uint x, y;
+    uint2() = default;
+    uint2(uint a, uint b) : x(a), y(b) {}
+};
+
+// Swizzle proxies. GCC does not allow members with constructors inside the
+// anonymous structs that give vectors their .xy / .rgb views, so those views
+// are trivial structs that convert to the real vector type on read. Kernels
+// therefore read swizzles freely but never assign to them (MSL allows that,
+// this shim does not, and the kernels avoid it).
+struct float2;
+struct float3;
+struct swz2 { float v[2]; operator float2() const; };
+struct swz3 { float v[3]; operator float3() const; };
+
+struct float2 {
+    union {
+        struct { float x, y; };
+        struct { float r, g; };
+        float v[2];
+    };
+    float2() = default;
+    float2(float a, float b) : x(a), y(b) {}
+    explicit float2(float s) : x(s), y(s) {}
+    explicit float2(uint2 u) : x((float)u.x), y((float)u.y) {}
+    float2(uint a, uint b) : x((float)a), y((float)b) {}
+    float2(int a, int b) : x((float)a), y((float)b) {}
+    float2& operator+=(const float2& o) { x += o.x; y += o.y; return *this; }
+    float2& operator-=(const float2& o) { x -= o.x; y -= o.y; return *this; }
+    float2& operator*=(const float2& o) { x *= o.x; y *= o.y; return *this; }
+    float2& operator+=(float s) { x += s; y += s; return *this; }
+    float2& operator-=(float s) { x -= s; y -= s; return *this; }
+    float2& operator*=(float s) { x *= s; y *= s; return *this; }
+    float2& operator/=(float s) { x /= s; y /= s; return *this; }
+};
+
+struct float3 {
+    union {
+        struct { float x, y, z; };
+        struct { float r, g, b; };
+        struct { swz2 xy; float z_; };
+        float v[3];
+    };
+    float3() = default;
+    float3(float a, float b, float c) : x(a), y(b), z(c) {}
+    explicit float3(float s) : x(s), y(s), z(s) {}
+    float3(float2 a, float c) : x(a.x), y(a.y), z(c) {}
+    float3& operator+=(const float3& o) { x += o.x; y += o.y; z += o.z; return *this; }
+    float3& operator-=(const float3& o) { x -= o.x; y -= o.y; z -= o.z; return *this; }
+    float3& operator*=(const float3& o) { x *= o.x; y *= o.y; z *= o.z; return *this; }
+    float3& operator/=(const float3& o) { x /= o.x; y /= o.y; z /= o.z; return *this; }
+    float3& operator+=(float s) { x += s; y += s; z += s; return *this; }
+    float3& operator-=(float s) { x -= s; y -= s; z -= s; return *this; }
+    float3& operator*=(float s) { x *= s; y *= s; z *= s; return *this; }
+    float3& operator/=(float s) { x /= s; y /= s; z /= s; return *this; }
+};
+
+struct float4 {
+    union {
+        struct { float x, y, z, w; };
+        struct { float r, g, b, a; };
+        struct { swz3 xyz; float w_; };
+        struct { swz3 rgb; float a_; };
+        struct { swz2 xy; swz2 zw; };
+        float v[4];
+    };
+    float4() = default;
+    float4(float a, float b, float c, float d) : x(a), y(b), z(c), w(d) {}
+    explicit float4(float s) : x(s), y(s), z(s), w(s) {}
+    float4(float3 p, float d) : x(p.x), y(p.y), z(p.z), w(d) {}
+    float4& operator+=(const float4& o) { x += o.x; y += o.y; z += o.z; w += o.w; return *this; }
+    float4& operator*=(float s) { x *= s; y *= s; z *= s; w *= s; return *this; }
+    float4& operator*=(const float4& o) { x *= o.x; y *= o.y; z *= o.z; w *= o.w; return *this; }
+};
+
+inline swz2::operator float2() const { return float2(v[0], v[1]); }
+inline swz3::operator float3() const { return float3(v[0], v[1], v[2]); }
+
+// Arithmetic. Non-template free functions so scalar widening works the way
+// MSL does it (float op vector and vector op float both broadcast).
+
+inline float2 operator+(const float2& a, const float2& b) { return float2(a.x + b.x, a.y + b.y); }
+inline float2 operator-(const float2& a, const float2& b) { return float2(a.x - b.x, a.y - b.y); }
+inline float2 operator*(const float2& a, const float2& b) { return float2(a.x * b.x, a.y * b.y); }
+inline float2 operator/(const float2& a, const float2& b) { return float2(a.x / b.x, a.y / b.y); }
+inline float2 operator*(const float2& a, float s) { return float2(a.x * s, a.y * s); }
+inline float2 operator*(float s, const float2& a) { return float2(a.x * s, a.y * s); }
+inline float2 operator/(const float2& a, float s) { return float2(a.x / s, a.y / s); }
+inline float2 operator/(float s, const float2& a) { return float2(s / a.x, s / a.y); }
+inline float2 operator+(const float2& a, float s) { return float2(a.x + s, a.y + s); }
+inline float2 operator+(float s, const float2& a) { return float2(a.x + s, a.y + s); }
+inline float2 operator-(const float2& a, float s) { return float2(a.x - s, a.y - s); }
+inline float2 operator-(float s, const float2& a) { return float2(s - a.x, s - a.y); }
+inline float2 operator-(const float2& a) { return float2(-a.x, -a.y); }
+
+inline float3 operator+(const float3& a, const float3& b) { return float3(a.x + b.x, a.y + b.y, a.z + b.z); }
+inline float3 operator-(const float3& a, const float3& b) { return float3(a.x - b.x, a.y - b.y, a.z - b.z); }
+inline float3 operator*(const float3& a, const float3& b) { return float3(a.x * b.x, a.y * b.y, a.z * b.z); }
+inline float3 operator/(const float3& a, const float3& b) { return float3(a.x / b.x, a.y / b.y, a.z / b.z); }
+inline float3 operator*(const float3& a, float s) { return float3(a.x * s, a.y * s, a.z * s); }
+inline float3 operator*(float s, const float3& a) { return float3(a.x * s, a.y * s, a.z * s); }
+inline float3 operator/(const float3& a, float s) { return float3(a.x / s, a.y / s, a.z / s); }
+inline float3 operator/(float s, const float3& a) { return float3(s / a.x, s / a.y, s / a.z); }
+inline float3 operator+(const float3& a, float s) { return float3(a.x + s, a.y + s, a.z + s); }
+inline float3 operator+(float s, const float3& a) { return float3(a.x + s, a.y + s, a.z + s); }
+inline float3 operator-(const float3& a, float s) { return float3(a.x - s, a.y - s, a.z - s); }
+inline float3 operator-(float s, const float3& a) { return float3(s - a.x, s - a.y, s - a.z); }
+inline float3 operator-(const float3& a) { return float3(-a.x, -a.y, -a.z); }
+
+inline float4 operator+(const float4& a, const float4& b) { return float4(a.x + b.x, a.y + b.y, a.z + b.z, a.w + b.w); }
+inline float4 operator-(const float4& a, const float4& b) { return float4(a.x - b.x, a.y - b.y, a.z - b.z, a.w - b.w); }
+inline float4 operator*(const float4& a, const float4& b) { return float4(a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w); }
+inline float4 operator*(const float4& a, float s) { return float4(a.x * s, a.y * s, a.z * s, a.w * s); }
+inline float4 operator*(float s, const float4& a) { return float4(a.x * s, a.y * s, a.z * s, a.w * s); }
+inline float4 operator/(const float4& a, float s) { return float4(a.x / s, a.y / s, a.z / s, a.w / s); }
+
+// ---------------------------------------------------------------- matrices
+
+// Column-major, constructed from columns, like MSL.
+struct float3x3 {
+    float3 c0, c1, c2;
+    float3x3() = default;
+    float3x3(float3 a, float3 b, float3 c) : c0(a), c1(b), c2(c) {}
+};
+inline float3 operator*(const float3x3& m, const float3& v) {
+    return float3(m.c0.x * v.x + m.c1.x * v.y + m.c2.x * v.z,
+                  m.c0.y * v.x + m.c1.y * v.y + m.c2.y * v.z,
+                  m.c0.z * v.x + m.c1.z * v.y + m.c2.z * v.z);
+}
+
+// ---------------------------------------------------------------- scalar math
+// MSL min/max propagate NaN like a plain comparison; fmin/fmax return the
+// non-NaN operand. Both are implemented to spec so NaN paths can be observed.
+
+inline float min(float a, float b) { return (b < a) ? b : a; }
+inline float max(float a, float b) { return (a < b) ? b : a; }
+inline int min(int a, int b) { return (b < a) ? b : a; }
+inline int max(int a, int b) { return (a < b) ? b : a; }
+inline uint min(uint a, uint b) { return (b < a) ? b : a; }
+inline uint max(uint a, uint b) { return (a < b) ? b : a; }
+inline float fmin(float a, float b) { return std::fmin(a, b); }
+inline float fmax(float a, float b) { return std::fmax(a, b); }
+inline float clamp(float x, float lo, float hi) { return min(max(x, lo), hi); }
+inline float saturate(float x) { return clamp(x, 0.0f, 1.0f); }
+inline float mix(float a, float b, float t) { return a + (b - a) * t; }
+inline float step(float e, float x) { return x < e ? 0.0f : 1.0f; }
+inline float smoothstep(float e0, float e1, float x) {
+    float t = clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);
+    return t * t * (3.0f - 2.0f * t);
+}
+inline float fract(float x) { return x - std::floor(x); }
+inline float floor(float x) { return std::floor(x); }
+inline float ceil(float x) { return std::ceil(x); }
+inline float abs(float x) { return std::fabs(x); }
+inline float sign(float x) { return (x > 0.0f) ? 1.0f : ((x < 0.0f) ? -1.0f : 0.0f); }
+inline float sqrt(float x) { return std::sqrt(x); }
+inline float rsqrt(float x) { return 1.0f / std::sqrt(x); }
+inline float pow(float x, float y) { return std::pow(x, y); }
+inline float exp(float x) { return std::exp(x); }
+inline float exp2(float x) { return std::exp2(x); }
+inline float log(float x) { return std::log(x); }
+inline float log2(float x) { return std::log2(x); }
+inline float sin(float x) { return std::sin(x); }
+inline float cos(float x) { return std::cos(x); }
+inline float atan2(float y, float x) { return std::atan2(y, x); }
+inline float round(float x) { return std::round(x); }
+inline float trunc(float x) { return std::trunc(x); }
+inline float fmod(float x, float y) { return std::fmod(x, y); }
+
+// ---------------------------------------------------------------- vector math
+
+inline float dot(const float2& a, const float2& b) { return a.x * b.x + a.y * b.y; }
+inline float dot(const float3& a, const float3& b) { return a.x * b.x + a.y * b.y + a.z * b.z; }
+inline float length(const float2& a) { return std::sqrt(dot(a, a)); }
+inline float length(const float3& a) { return std::sqrt(dot(a, a)); }
+inline float2 normalize(const float2& a) { return a / length(a); }
+inline float3 normalize(const float3& a) { return a / length(a); }
+inline float2 fract(const float2& a) { return float2(fract(a.x), fract(a.y)); }
+inline float3 fract(const float3& a) { return float3(fract(a.x), fract(a.y), fract(a.z)); }
+inline float2 floor(const float2& a) { return float2(std::floor(a.x), std::floor(a.y)); }
+inline float3 floor(const float3& a) { return float3(std::floor(a.x), std::floor(a.y), std::floor(a.z)); }
+inline float2 abs(const float2& a) { return float2(std::fabs(a.x), std::fabs(a.y)); }
+inline float3 abs(const float3& a) { return float3(std::fabs(a.x), std::fabs(a.y), std::fabs(a.z)); }
+inline float3 sign(const float3& a) { return float3(sign(a.x), sign(a.y), sign(a.z)); }
+inline float3 sqrt(const float3& a) { return float3(std::sqrt(a.x), std::sqrt(a.y), std::sqrt(a.z)); }
+inline float3 exp(const float3& a) { return float3(std::exp(a.x), std::exp(a.y), std::exp(a.z)); }
+inline float3 pow(const float3& a, const float3& b) { return float3(std::pow(a.x, b.x), std::pow(a.y, b.y), std::pow(a.z, b.z)); }
+inline float3 pow(const float3& a, float b) { return float3(std::pow(a.x, b), std::pow(a.y, b), std::pow(a.z, b)); }
+inline float2 min(const float2& a, const float2& b) { return float2(min(a.x, b.x), min(a.y, b.y)); }
+inline float2 max(const float2& a, const float2& b) { return float2(max(a.x, b.x), max(a.y, b.y)); }
+inline float3 min(const float3& a, const float3& b) { return float3(min(a.x, b.x), min(a.y, b.y), min(a.z, b.z)); }
+inline float3 max(const float3& a, const float3& b) { return float3(max(a.x, b.x), max(a.y, b.y), max(a.z, b.z)); }
+inline float3 min(const float3& a, float b) { return float3(min(a.x, b), min(a.y, b), min(a.z, b)); }
+inline float3 max(const float3& a, float b) { return float3(max(a.x, b), max(a.y, b), max(a.z, b)); }
+inline float4 min(const float4& a, float b) { return float4(min(a.x, b), min(a.y, b), min(a.z, b), min(a.w, b)); }
+inline float4 max(const float4& a, float b) { return float4(max(a.x, b), max(a.y, b), max(a.z, b), max(a.w, b)); }
+inline float2 clamp(const float2& a, float lo, float hi) { return float2(clamp(a.x, lo, hi), clamp(a.y, lo, hi)); }
+inline float3 clamp(const float3& a, float lo, float hi) { return float3(clamp(a.x, lo, hi), clamp(a.y, lo, hi), clamp(a.z, lo, hi)); }
+inline float3 clamp(const float3& a, const float3& lo, const float3& hi) { return float3(clamp(a.x, lo.x, hi.x), clamp(a.y, lo.y, hi.y), clamp(a.z, lo.z, hi.z)); }
+inline float4 clamp(const float4& a, float lo, float hi) { return float4(clamp(a.x, lo, hi), clamp(a.y, lo, hi), clamp(a.z, lo, hi), clamp(a.w, lo, hi)); }
+inline float3 saturate(const float3& a) { return clamp(a, 0.0f, 1.0f); }
+inline float2 mix(const float2& a, const float2& b, float t) { return a + (b - a) * t; }
+inline float3 mix(const float3& a, const float3& b, float t) { return a + (b - a) * t; }
+inline float3 mix(const float3& a, const float3& b, const float3& t) { return a + (b - a) * t; }
+inline float4 mix(const float4& a, const float4& b, float t) { return a + (b - a) * t; }
+inline float3 smoothstep(float e0, float e1, const float3& x) { return float3(smoothstep(e0, e1, x.x), smoothstep(e0, e1, x.y), smoothstep(e0, e1, x.z)); }
+
+// ---------------------------------------------------------------- textures
+
+enum class access { read, write, sample, read_write };
+enum class coord { normalized, pixel };
+enum class address { clamp_to_edge, clamp_to_zero, repeat, mirrored_repeat };
+enum class filter { nearest, linear };
+
+struct sampler {
+    constexpr sampler(coord, address, filter) {}
+    constexpr sampler(address, filter) {}
+    constexpr sampler(filter) {}
+};
+
+enum class PixelFormat { rgba8Unorm, rgba16Float, rgba32Float };
+
+// Round a float to the nearest representable half (round to nearest even),
+// overflowing to infinity above the half range, exactly what an rgba16Float
+// store does on the GPU.
+inline float toHalfAndBack(float f) {
+    if (std::isnan(f)) return f;
+    float a = std::fabs(f);
+    if (a > 65504.0f) return f > 0 ? INFINITY : -INFINITY;
+    if (a < 6.103515625e-05f) {
+        // Subnormal half: quantize to multiples of 2^-24.
+        float q = std::nearbyint(f * 16777216.0f) / 16777216.0f;
+        return q;
+    }
+    int e;
+    float m = std::frexp(a, &e);           // a = m * 2^e, m in [0.5, 1)
+    float scale = std::ldexp(1.0f, e - 11); // 10 mantissa bits below the leading 1
+    float q = std::nearbyint(a / scale) * scale;
+    if (q > 65504.0f) return f > 0 ? INFINITY : -INFINITY;
+    return f < 0 ? -q : q;
+}
+
+struct TextureStorage {
+    int width = 0, height = 0;
+    PixelFormat format = PixelFormat::rgba32Float;
+    std::vector<float4> px;
+    TextureStorage(int w, int h, PixelFormat f) : width(w), height(h), format(f), px((size_t)w * h, float4(0.0f, 0.0f, 0.0f, 0.0f)) {}
+};
+
+template <typename T, access A = access::sample>
+struct texture2d {
+    TextureStorage* s = nullptr;
+    texture2d() = default;
+    explicit texture2d(TextureStorage* st) : s(st) {}
+
+    uint get_width() const { return (uint)s->width; }
+    uint get_height() const { return (uint)s->height; }
+
+    float4 read(uint2 gid) const {
+        int x = (int)min(gid.x, (uint)(s->width - 1));
+        int y = (int)min(gid.y, (uint)(s->height - 1));
+        return s->px[(size_t)y * s->width + x];
+    }
+
+    void write(float4 v, uint2 gid) {
+        if (gid.x >= (uint)s->width || gid.y >= (uint)s->height) return;
+        if (s->format == PixelFormat::rgba8Unorm) {
+            v = float4(std::nearbyint(saturate(v.x) * 255.0f) / 255.0f,
+                       std::nearbyint(saturate(v.y) * 255.0f) / 255.0f,
+                       std::nearbyint(saturate(v.z) * 255.0f) / 255.0f,
+                       std::nearbyint(saturate(v.w) * 255.0f) / 255.0f);
+        } else if (s->format == PixelFormat::rgba16Float) {
+            v = float4(toHalfAndBack(v.x), toHalfAndBack(v.y), toHalfAndBack(v.z), toHalfAndBack(v.w));
+        }
+        s->px[(size_t)gid.y * s->width + gid.x] = v;
+    }
+
+    // Bilinear sample with normalized coordinates and clamp_to_edge.
+    float4 sample(sampler, float2 uv) const {
+        float fx = uv.x * (float)s->width - 0.5f;
+        float fy = uv.y * (float)s->height - 0.5f;
+        float x0f = std::floor(fx), y0f = std::floor(fy);
+        float tx = fx - x0f, ty = fy - y0f;
+        int x0 = (int)x0f, y0 = (int)y0f;
+        int x1 = x0 + 1, y1 = y0 + 1;
+        int wmax = s->width - 1, hmax = s->height - 1;
+        x0 = x0 < 0 ? 0 : (x0 > wmax ? wmax : x0);
+        x1 = x1 < 0 ? 0 : (x1 > wmax ? wmax : x1);
+        y0 = y0 < 0 ? 0 : (y0 > hmax ? hmax : y0);
+        y1 = y1 < 0 ? 0 : (y1 > hmax ? hmax : y1);
+        const float4& p00 = s->px[(size_t)y0 * s->width + x0];
+        const float4& p10 = s->px[(size_t)y0 * s->width + x1];
+        const float4& p01 = s->px[(size_t)y1 * s->width + x0];
+        const float4& p11 = s->px[(size_t)y1 * s->width + x1];
+        float4 top = p00 * (1.0f - tx) + p10 * tx;
+        float4 bot = p01 * (1.0f - tx) + p11 * tx;
+        return top * (1.0f - ty) + bot * ty;
+    }
+};
+
+} // namespace metal

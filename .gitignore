@@ -1,0 +1,4 @@
+Tools/ref/build/
+*.rgba
+__pycache__/
+.DS_Store
