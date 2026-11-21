@@ -214,7 +214,7 @@ final class MarennEngine {
         lastParams = p
 
         let rw: MTLTextureUsage = [.shaderRead, .shaderWrite]
-        guard let srcTex = makeTexture(w, h, .rgba8Unorm_srgb, [.shaderRead], cpu: true),
+        guard let srcTex = makeTexture(w, h, .rgba16Float, [.shaderRead], cpu: true),
               let lensTex = makeTexture(w, h, .rgba16Float, rw, cpu: false),
               let outTex = makeTexture(w, h, .rgba8Unorm, rw, cpu: true) else { return nil }
 
@@ -231,8 +231,10 @@ final class MarennEngine {
             }
         }
 
-        srcTex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
-                       withBytes: source.bytes, bytesPerRow: w * 4)
+        source.pixels.withUnsafeBytes { buf in
+            srcTex.replace(region: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0,
+                           withBytes: buf.baseAddress!, bytesPerRow: w * 8)
+        }
 
         guard let cmd = queue.makeCommandBuffer() else { return nil }
         let plen = MemoryLayout<MarennParams>.stride
@@ -437,8 +439,10 @@ final class MarennEngine {
         return max(0.85, min(1.20, raw))
     }
 
+    /// Statistics on display-encoded values, as the measured exposure model expects.
+    /// Mirrored by scene_stats() in Tools/cpu/marenn_cpu.cpp.
     private func sceneStats(_ baked: Baked) -> SceneStats {
-        let bytes = baked.bytes
+        let px = baked.pixels
         let total = baked.width * baked.height
         guard total > 0 else { return SceneStats(p50: 0.45, meanLuma: 0.45, hiFrac: 0) }
         let step = max(1, total / 40000)
@@ -449,9 +453,9 @@ final class MarennEngine {
         var idx = 0
         while idx < total {
             let p = idx * 4
-            let r = Float(bytes[p]) / 255
-            let g = Float(bytes[p + 1]) / 255
-            let b = Float(bytes[p + 2]) / 255
+            let r = MarennEngine.encodeSRGB(MarennEngine.halfToFloat(px[p]))
+            let g = MarennEngine.encodeSRGB(MarennEngine.halfToFloat(px[p + 1]))
+            let b = MarennEngine.encodeSRGB(MarennEngine.halfToFloat(px[p + 2]))
             let l = 0.2126 * r + 0.7152 * g + 0.0722 * b
             lumaSum += l
             if l > 0.82 { hiCount += 1 }
@@ -471,27 +475,53 @@ final class MarennEngine {
         return SceneStats(p50: p50, meanLuma: lumaSum / Float(count), hiFrac: Float(hiCount) / Float(count))
     }
 
-    private struct Baked { let bytes: [UInt8]; let width: Int; let height: Int }
+    /// RGBA half floats in extended linear sRGB. Wide gamut (Display P3) colours keep
+    /// their values outside 0...1 instead of being clipped on the way in.
+    private struct Baked { let pixels: [UInt16]; let width: Int; let height: Int }
 
     private func bake(_ cg: CGImage) -> Baked? {
         let w = cg.width, h = cg.height
-        guard w >= 1, h >= 1 else { return nil }
-        var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
-        return Baked(bytes: bytes, width: w, height: h)
+        guard w >= 1, h >= 1, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else { return nil }
+        var pixels = [UInt16](repeating: 0, count: w * h * 4)
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.floatComponents.rawValue
+            | CGBitmapInfo.byteOrder16Little.rawValue
+        let drawn: Bool = pixels.withUnsafeMutableBytes { buf in
+            guard let ctx = CGContext(data: buf.baseAddress, width: w, height: h, bitsPerComponent: 16,
+                                      bytesPerRow: w * 8, space: space, bitmapInfo: info) else { return false }
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+            return true
+        }
+        return drawn ? Baked(pixels: pixels, width: w, height: h) : nil
     }
 
     private func readBack(_ texture: MTLTexture) -> CGImage? {
         let w = texture.width, h = texture.height
         var bytes = [UInt8](repeating: 0, count: w * h * 4)
-        texture.getBytes(&bytes, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        bytes.withUnsafeMutableBytes { buf in
+            texture.getBytes(buf.baseAddress!, bytesPerRow: w * 4, from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+        }
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
-              let ctx = CGContext(data: &bytes, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
-                                  space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        return ctx.makeImage()
+              let provider = CGDataProvider(data: Data(bytes) as CFData) else { return nil }
+        return CGImage(width: w, height: h, bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: w * 4, space: space,
+                       bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                       provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)
+    }
+
+    static func halfToFloat(_ h: UInt16) -> Float {
+        let sign: UInt32 = UInt32(h & 0x8000) << 16
+        let exponent = Int((h >> 10) & 0x1F)
+        let mantissa = UInt32(h & 0x3FF)
+        if exponent == 0 {
+            let v = Float(mantissa) * (1.0 / 16_777_216.0)
+            return sign != 0 ? -v : v
+        }
+        if exponent == 31 { return Float(bitPattern: sign | 0x7F80_0000 | (mantissa << 13)) }
+        return Float(bitPattern: sign | (UInt32(exponent + 112) << 23) | (mantissa << 13))
+    }
+
+    static func encodeSRGB(_ linear: Float) -> Float {
+        let c = max(0, min(1, linear))
+        return c <= 0.0031308 ? c * 12.92 : 1.055 * powf(c, 1 / 2.4) - 0.055
     }
 
     static let source = """
@@ -898,6 +928,13 @@ final class MarennEngine {
         // the spill beyond the local level shows.
         float spill = max(gl.a - halKnee(lensC.a, P), 0.0);
         e += float3(P.halR, P.halG, P.halB) * spill * P.halIntensity;
+
+        // wide gamut photos (Display P3) arrive with colours outside sRGB. Film does not clip
+        // a channel, it runs out of saturation, so pull such colours toward grey just enough.
+        float Lg = lumv(e);
+        float mn = min(min(e.r, e.g), e.b);
+        if (mn < 0.0 && Lg > 0.0) e = Lg + (e - Lg) * (Lg / (Lg - mn));
+        e = max(e, 0.0);
 
         // film shoulder: highlights roll off instead of clipping
         float3 t = max(e - 0.8, 0.0) / 0.2;

@@ -35,15 +35,21 @@ struct RNG {  // MarennRNG
 
 struct Stats { float p50, meanLuma, hiFrac; };
 
-static Stats scene_stats(const uint8_t* bytes, int w, int h) {
+static float encode_srgb(float linear) {  // MarennEngine.encodeSRGB
+    float c = std::max(0.0f, std::min(1.0f, linear));
+    return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1 / 2.4f) - 0.055f;
+}
+
+// MarennEngine.sceneStats(), on the baked linear half floats
+static Stats scene_stats(const TexStore& src, int w, int h) {
     int total = w * h;
     int step = std::max(1, total / 40000);
     int hist[64] = {0};
     int count = 0, hiCount = 0;
     float lumaSum = 0;
     for (int idx = 0; idx < total; idx += step) {
-        const uint8_t* p = bytes + size_t(idx) * 4;
-        float r = p[0] / 255.0f, g = p[1] / 255.0f, b = p[2] / 255.0f;
+        const float4& px = src.px[size_t(idx)];
+        float r = encode_srgb(px.x), g = encode_srgb(px.y), b = encode_srgb(px.z);
         float l = 0.2126f * r + 0.7152f * g + 0.0722f * b;
         lumaSum += l;
         if (l > 0.82f) hiCount++;
@@ -171,7 +177,9 @@ extern "C" int marenn_process(const uint8_t* in, int w, int h, uint8_t* out, uin
                               int grain, int stampOn, int yy, int mm, int dd, float leak, const char* overrides,
                               float* info) {
     if (w < 2 || h < 2) return 1;
-    Stats st = scene_stats(in, w, h);
+    TexStore src(w, h, pixfmt::rgba16float), lensT(w, h, pixfmt::rgba16float), outT(w, h, pixfmt::rgba8unorm);
+    src.upload_srgb8_as_linear_half(in);
+    Stats st = scene_stats(src, w, h);
     MarennParams base = default_MarennParams();
     apply_overrides(base, overrides);
     Options o{seed, frameVariation, grain, stampOn, yy, mm, dd, leak};
@@ -179,8 +187,6 @@ extern "C" int marenn_process(const uint8_t* in, int w, int h, uint8_t* out, uin
     MarennParams p = frame_params(base, w, h, st, o, encGain);
     if (info) { info[0] = encGain; info[1] = st.p50; info[2] = p.grainPush; }
 
-    TexStore src(w, h, pixfmt::rgba8unorm_srgb), lensT(w, h, pixfmt::rgba16float), outT(w, h, pixfmt::rgba8unorm);
-    src.upload_rgba8(in);
     auto sizes = pyramid_sizes(w, h);
     int n = int(sizes.size());
     std::vector<TexStore> levels, ups;

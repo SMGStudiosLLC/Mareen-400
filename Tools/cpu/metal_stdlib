@@ -254,6 +254,15 @@ struct TexStore {
             px[i] = v;
         }
     }
+    // 8 bit sRGB bytes decoded to linear half floats, like MarennEngine.bake() into an
+    // extended linear sRGB half float context
+    void upload_srgb8_as_linear_half(const uint8_t* b) {
+        for (size_t i = 0; i < px.size(); i++) {
+            float4 v{srgb_to_linear(b[4 * i] / 255.0f), srgb_to_linear(b[4 * i + 1] / 255.0f),
+                     srgb_to_linear(b[4 * i + 2] / 255.0f), b[4 * i + 3] / 255.0f};
+            px[i] = float4{float(half(v.x)), float(half(v.y)), float(half(v.z)), float(half(v.w))};
+        }
+    }
     void download_rgba8(uint8_t* b) const {
         for (size_t i = 0; i < px.size(); i++) {
             float4 v = px[i];

@@ -58,6 +58,28 @@ jobs:
           .venv/bin/python Tools/cpu/compare.py ci-out/rooftop_extras_gpu.png ci-out/rooftop_extras_cpu.png || status=1
           exit $status
 
+      - name: Wide gamut input (Display P3 colours outside sRGB)
+        run: |
+          .venv/bin/python - <<'PY'
+          import colorsys
+          from PIL import Image
+          w, h = 1200, 800
+          im = Image.new("RGB", (w, h))
+          px = im.load()
+          for y in range(h):
+              for x in range(w):
+                  hue, light = x / w, 0.15 + 0.7 * (y / h)
+                  r, g, b = colorsys.hls_to_rgb(hue, light, 1.0)
+                  px[x, y] = (int(r * 255), int(g * 255), int(b * 255))
+          im.save("ci-in/chart.png")
+          PY
+          cp ci-in/chart.png ci-in/chart_p3.png
+          sips --embedProfile "/System/Library/ColorSync/Profiles/Display P3.icc" ci-in/chart_p3.png --out ci-in/chart_p3.png
+          sips -g profile ci-in/chart_p3.png
+          ./marenn ci-in/chart.png ci-out/chart_srgb_gpu.png --seed 2 --variation 0 --nograin
+          ./marenn ci-in/chart_p3.png ci-out/chart_p3_gpu.png --seed 2 --variation 0 --nograin
+          cp ci-in/chart.png ci-in/chart_p3.png ci-out/
+
       - name: Look regression checks (grain isotropy, on-screen consistency, determinism)
         run: .venv/bin/python Tools/cpu/check_look.py
 
