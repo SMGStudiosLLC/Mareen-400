@@ -9,10 +9,12 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+
       - name: Toolchain
         run: |
           xcodebuild -version
           swift --version
+
       - name: Compile the embedded Metal source with Apple's compiler
         run: |
           python3 - <<'PY'
@@ -23,29 +25,41 @@ jobs:
           PY
           xcrun -sdk iphoneos metal -std=metal3.0 -Werror -c marenn.metal -o marenn_ios.air
           xcrun -sdk macosx metal -Werror -c marenn.metal -o marenn_mac.air
+
       - name: Type-check the app file against the iOS SDK
-        run: |
-          xcrun -sdk iphoneos swiftc -typecheck -target arm64-apple-ios16.0 MarennFilter.swift
+        run: xcrun -sdk iphoneos swiftc -typecheck -target arm64-apple-ios16.0 MarennFilter.swift
+
       - name: Build the command line tool
+        run: swiftc -O -parse-as-library MarennFilter.swift Tools/marenn_cli.swift -o marenn
+
+      - name: Python and the CPU reference renderer
         run: |
-          if grep -q "@main" Tools/marenn_cli.swift; then
-            swiftc -O -parse-as-library MarennFilter.swift Tools/marenn_cli.swift -o marenn
-          else
-            swiftc -O Tools/marenn_cli.swift -o marenn
-          fi
-      - name: Metal device check and render
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet numpy pillow
+          Tools/cpu/build.sh
+
+      - name: Render on the GPU and on the CPU reference, compare
         run: |
-          system_profiler SPDisplaysDataType | head -20 || true
-          mkdir -p ci-out
-          if grep -q "@main" Tools/marenn_cli.swift; then
-            ./marenn Examples/original-rooftop.jpg ci-out/rooftop.png --seed 3 || echo "render failed"
-            ./marenn Examples/original-surf.jpg ci-out/surf.png --seed 3 || echo "render failed"
-          else
-            ./marenn MarennFilter.swift Examples/original-rooftop.jpg ci-out/rooftop.png --seed 3 || echo "render failed"
-            ./marenn MarennFilter.swift Examples/original-surf.jpg ci-out/surf.png --seed 3 || echo "render failed"
-          fi
-          ls -la ci-out
+          mkdir -p ci-in ci-out
+          .venv/bin/python - <<'PY'
+          from PIL import Image
+          for n in ["rooftop", "surf"]:
+              Image.open(f"Examples/original-{n}.jpg").convert("RGB").save(f"ci-in/{n}.png")
+          PY
+          system_profiler SPDisplaysDataType | grep -E "Chipset|Metal" || true
+          status=0
+          for n in rooftop surf; do
+            ./marenn ci-in/$n.png ci-out/${n}_gpu.png --seed 3 --variation 0
+            .venv/bin/python Tools/cpu/marenn.py ci-in/$n.png ci-out/${n}_cpu.png --seed 3 --variation 0
+            .venv/bin/python Tools/cpu/compare.py ci-out/${n}_gpu.png ci-out/${n}_cpu.png || status=1
+          done
+          ./marenn ci-in/rooftop.png ci-out/rooftop_extras_gpu.png --seed 9 --stamp 2026-11-21 --leak 0.7
+          .venv/bin/python Tools/cpu/marenn.py ci-in/rooftop.png ci-out/rooftop_extras_cpu.png --seed 9 --stamp 2026-11-21 --leak 0.7
+          .venv/bin/python Tools/cpu/compare.py ci-out/rooftop_extras_gpu.png ci-out/rooftop_extras_cpu.png || status=1
+          exit $status
+
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: renders
           path: ci-out

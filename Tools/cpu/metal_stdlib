@@ -1,0 +1,309 @@
+// metal_stdlib, CPU edition.
+//
+// A small compatibility layer that lets clang compile and run the Metal Shading
+// Language source embedded in MarennFilter.swift on an ordinary CPU. It exists so
+// the shipped shader can be rendered, tested and diffed on machines without Metal
+// (Linux, CI). It implements only the subset of MSL the filter uses.
+//
+// Vectors are clang ext_vector_type, so swizzles such as .rgb and .xy are native.
+// Constructor calls like float3(a, b) and unsuffixed float literals are rewritten
+// by msl2cpp.py before compilation, see that file for details.
+#pragma once
+#include <cmath>
+#include <cstdint>
+#include <cstring>
+#include <type_traits>
+#include <vector>
+
+#define kernel
+#define constant
+#define device
+#define thread
+#define threadgroup
+
+namespace metal {
+
+using uint = unsigned int;
+using uchar = unsigned char;
+using ushort = unsigned short;
+using half = _Float16;
+
+#define MSL_VEC(T, N, NAME) typedef T NAME __attribute__((ext_vector_type(N)));
+MSL_VEC(float, 2, float2) MSL_VEC(float, 3, float3) MSL_VEC(float, 4, float4)
+MSL_VEC(int, 2, int2) MSL_VEC(int, 3, int3) MSL_VEC(int, 4, int4)
+MSL_VEC(uint, 2, uint2) MSL_VEC(uint, 3, uint3) MSL_VEC(uint, 4, uint4)
+MSL_VEC(half, 2, half2) MSL_VEC(half, 3, half3) MSL_VEC(half, 4, half4)
+#undef MSL_VEC
+
+// ---- type info --------------------------------------------------------------
+template <class T> struct vinfo { static constexpr bool is_vec = false; static constexpr int n = 1; using elem = T; };
+#define MSL_VI(NAME, E, N) template <> struct vinfo<NAME> { static constexpr bool is_vec = true; static constexpr int n = N; using elem = E; };
+MSL_VI(float2, float, 2) MSL_VI(float3, float, 3) MSL_VI(float4, float, 4)
+MSL_VI(int2, int, 2) MSL_VI(int3, int, 3) MSL_VI(int4, int, 4)
+MSL_VI(uint2, uint, 2) MSL_VI(uint3, uint, 3) MSL_VI(uint4, uint, 4)
+MSL_VI(half2, half, 2) MSL_VI(half3, half, 3) MSL_VI(half4, half, 4)
+#undef MSL_VI
+
+template <class T> constexpr bool is_vec_v = vinfo<std::decay_t<T>>::is_vec;
+
+// ---- constructors: float3(a, b), float4(rgb, 1), float2(gid) ... -------------
+template <class E, class A> inline void msl_push(E* out, int& k, const A& a) {
+    if constexpr (is_vec_v<A>) {
+        for (int i = 0; i < vinfo<A>::n; i++) out[k++] = E(a[i]);
+    } else {
+        out[k++] = E(a);
+    }
+}
+template <class V, class... A> inline V make_vec(const A&... a) {
+    using E = typename vinfo<V>::elem;
+    constexpr int N = vinfo<V>::n;
+    E tmp[16] = {};
+    int k = 0;
+    (msl_push<E>(tmp, k, a), ...);
+    V r;
+    if (k == 1) { for (int i = 0; i < N; i++) r[i] = tmp[0]; }
+    else { for (int i = 0; i < N; i++) r[i] = tmp[i]; }
+    return r;
+}
+
+// result type of a mixed scalar/vector call: the first vector argument wins
+template <class... A> struct first_vec { using type = float; };
+template <class A, class... R> struct first_vec<A, R...> {
+    using type = std::conditional_t<is_vec_v<A>, std::decay_t<A>, typename first_vec<R...>::type>;
+};
+template <class V, class A> inline V splat(const A& a) {
+    if constexpr (is_vec_v<A>) return V(a); else return make_vec<V>(a);
+}
+
+// ---- elementwise math ---------------------------------------------------------
+#define MSL_UNARY(NAME, EXPR)                                                         \
+    inline float NAME(float x) { return (EXPR); }                                     \
+    template <class V, std::enable_if_t<is_vec_v<V>, int> = 0> inline V NAME(V v) {  \
+        V r; for (int i = 0; i < vinfo<V>::n; i++) { float x = v[i]; r[i] = (EXPR); } \
+        return r; }
+MSL_UNARY(fract, x - std::floor(x))
+MSL_UNARY(floor, std::floor(x))
+MSL_UNARY(ceil, std::ceil(x))
+MSL_UNARY(round, std::round(x))
+MSL_UNARY(rint, std::rint(x))
+MSL_UNARY(trunc, std::trunc(x))
+MSL_UNARY(sqrt, std::sqrt(x))
+MSL_UNARY(rsqrt, 1.0f / std::sqrt(x))
+MSL_UNARY(exp, std::exp(x))
+MSL_UNARY(exp2, std::exp2(x))
+MSL_UNARY(log, std::log(x))
+MSL_UNARY(log2, std::log2(x))
+MSL_UNARY(log10, std::log10(x))
+MSL_UNARY(sin, std::sin(x))
+MSL_UNARY(cos, std::cos(x))
+MSL_UNARY(tan, std::tan(x))
+MSL_UNARY(asin, std::asin(x))
+MSL_UNARY(acos, std::acos(x))
+MSL_UNARY(atan, std::atan(x))
+MSL_UNARY(tanh, std::tanh(x))
+MSL_UNARY(saturate, x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x))
+MSL_UNARY(sign, x > 0.0f ? 1.0f : (x < 0.0f ? -1.0f : 0.0f))
+#undef MSL_UNARY
+
+inline float abs(float x) { return std::fabs(x); }
+inline int abs(int x) { return x < 0 ? -x : x; }
+template <class V, std::enable_if_t<is_vec_v<V>, int> = 0> inline V abs(V v) {
+    V r; for (int i = 0; i < vinfo<V>::n; i++) r[i] = v[i] < 0 ? -v[i] : v[i]; return r;
+}
+
+#define MSL_BINARY(NAME, EXPR)                                                               \
+    template <class A, class B> inline auto NAME(const A& a_, const B& b_) {                 \
+        if constexpr (!is_vec_v<A> && !is_vec_v<B>) {                                        \
+            using S = std::conditional_t<std::is_integral_v<A> && std::is_integral_v<B>,     \
+                                         std::common_type_t<A, B>, float>;                   \
+            S a = S(a_), b = S(b_); return S(EXPR);                                          \
+        } else {                                                                             \
+            using V = typename first_vec<A, B>::type;                                        \
+            using E = typename vinfo<V>::elem;                                               \
+            V va = splat<V>(a_), vb = splat<V>(b_), r;                                       \
+            for (int i = 0; i < vinfo<V>::n; i++) { E a = va[i], b = vb[i]; r[i] = E(EXPR); } \
+            return r;                                                                        \
+        } }
+MSL_BINARY(min, (b < a ? b : a))
+MSL_BINARY(max, (a < b ? b : a))
+MSL_BINARY(pow, std::pow(a, b))
+MSL_BINARY(powr, std::pow(a, b))
+MSL_BINARY(atan2, std::atan2(a, b))
+MSL_BINARY(fmod, std::fmod(a, b))
+MSL_BINARY(step, (b < a ? 0 : 1))
+#undef MSL_BINARY
+
+template <class X, class L, class H> inline auto clamp(const X& x, const L& lo, const H& hi) {
+    return min(max(x, lo), hi);
+}
+template <class A, class B, class T> inline auto mix(const A& a_, const B& b_, const T& t_) {
+    using V = typename first_vec<A, B, T>::type;
+    if constexpr (!is_vec_v<V>) { float a = a_, b = b_, t = t_; return a + (b - a) * t; }
+    else { V a = splat<V>(a_), b = splat<V>(b_), t = splat<V>(t_); return a + (b - a) * t; }
+}
+template <class A, class B, class X> inline auto smoothstep(const A& e0_, const B& e1_, const X& x_) {
+    using V = typename first_vec<A, B, X>::type;
+    if constexpr (!is_vec_v<V>) {
+        float e0 = e0_, e1 = e1_, x = x_;
+        float t = saturate((x - e0) / (e1 - e0));
+        return t * t * (3.0f - 2.0f * t);
+    } else {
+        V e0 = splat<V>(e0_), e1 = splat<V>(e1_), x = splat<V>(x_);
+        V t = saturate((x - e0) / (e1 - e0));
+        return t * t * (3.0f - 2.0f * t);
+    }
+}
+template <class A, class B, class C> inline auto fma(const A& a, const B& b, const C& c) { return a * b + c; }
+
+template <class V, std::enable_if_t<is_vec_v<V>, int> = 0> inline float dot(V a, V b) {
+    float s = 0; for (int i = 0; i < vinfo<V>::n; i++) s += float(a[i]) * float(b[i]); return s;
+}
+inline float dot(float a, float b) { return a * b; }
+template <class V> inline float length_squared(V v) { return dot(v, v); }
+template <class V> inline float length(V v) { return std::sqrt(dot(v, v)); }
+inline float length(float v) { return std::fabs(v); }
+template <class V> inline float distance(V a, V b) { return length(a - b); }
+template <class V> inline V normalize(V v) { return v / std::sqrt(dot(v, v)); }
+inline float3 cross(float3 a, float3 b) { return a.yzx * b.zxy - a.zxy * b.yzx; }
+
+template <class C, class V> inline V select(V a, V b, C c) {
+    if constexpr (is_vec_v<V>) { V r; for (int i = 0; i < vinfo<V>::n; i++) r[i] = c[i] ? b[i] : a[i]; return r; }
+    else return c ? b : a;
+}
+template <class V> inline bool any(V v) { for (int i = 0; i < vinfo<V>::n; i++) if (v[i]) return true; return false; }
+template <class V> inline bool all(V v) { for (int i = 0; i < vinfo<V>::n; i++) if (!v[i]) return false; return true; }
+inline bool isnan(float x) { return std::isnan(x); }
+inline bool isinf(float x) { return std::isinf(x); }
+
+template <class T, class U> inline T as_type(const U& u) {
+    static_assert(sizeof(T) == sizeof(U), "as_type size mismatch");
+    T t; std::memcpy(&t, &u, sizeof(T)); return t;
+}
+
+// ---- matrices (only what the filter uses) -----------------------------------------
+struct float3x3 {
+    float3 c[3];
+    float3x3() { c[0] = 0; c[1] = 0; c[2] = 0; }
+    float3x3(float3 a, float3 b, float3 d) { c[0] = a; c[1] = b; c[2] = d; }
+    float3 operator*(float3 v) const { return c[0] * v.x + c[1] * v.y + c[2] * v.z; }
+    float3& operator[](int i) { return c[i]; }
+    const float3& operator[](int i) const { return c[i]; }
+};
+inline float3 operator*(float3 v, const float3x3& m) {
+    return float3{dot(v, m.c[0]), dot(v, m.c[1]), dot(v, m.c[2])};
+}
+
+// ---- samplers ---------------------------------------------------------------------
+enum class access { read, write, read_write, sample };
+enum class coord { normalized, pixel };
+enum class address { clamp_to_edge, clamp_to_zero, repeat, mirrored_repeat };
+enum class filter { nearest, linear };
+enum class mip_filter { none, nearest, linear };
+
+struct sampler {
+    filter f = filter::nearest;
+    address a = address::clamp_to_edge;
+    coord c = coord::normalized;
+    constexpr sampler() {}
+    template <class... A> constexpr sampler(A... args) { (set(args), ...); }
+    constexpr void set(filter x) { f = x; }
+    constexpr void set(address x) { a = x; }
+    constexpr void set(coord x) { c = x; }
+    constexpr void set(mip_filter) {}
+};
+
+// ---- textures -----------------------------------------------------------------------
+// Pixel formats store values after the same quantisation the GPU applies on write.
+enum class pixfmt { rgba8unorm, rgba8unorm_srgb, rgba16float, rgba32float, r16float, r32float };
+
+inline float srgb_to_linear(float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); }
+inline float linear_to_srgb(float c) {
+    c = c < 0 ? 0 : (c > 1 ? 1 : c);
+    return c <= 0.0031308f ? c * 12.92f : 1.055f * std::pow(c, 1.0f / 2.4f) - 0.055f;
+}
+
+struct TexStore {
+    int w = 0, h = 0;
+    pixfmt fmt = pixfmt::rgba16float;
+    std::vector<float4> px;  // decoded values as a shader would read them
+    TexStore() {}
+    TexStore(int w_, int h_, pixfmt f) : w(w_), h(h_), fmt(f), px(size_t(w_) * h_) {
+        for (auto& p : px) p = float4{0, 0, 0, 0};
+    }
+    static float q8(float v) { v = v < 0 ? 0 : (v > 1 ? 1 : v); return std::nearbyint(v * 255.0f) / 255.0f; }
+    float4 quantize(float4 v) const {
+        switch (fmt) {
+        case pixfmt::rgba8unorm: return float4{q8(v.x), q8(v.y), q8(v.z), q8(v.w)};
+        case pixfmt::rgba8unorm_srgb: return float4{srgb_to_linear(q8(linear_to_srgb(v.x))),
+                                                    srgb_to_linear(q8(linear_to_srgb(v.y))),
+                                                    srgb_to_linear(q8(linear_to_srgb(v.z))), q8(v.w)};
+        case pixfmt::rgba16float: return float4{float(half(v.x)), float(half(v.y)), float(half(v.z)), float(half(v.w))};
+        case pixfmt::r16float: return float4{float(half(v.x)), 0, 0, 1};
+        case pixfmt::r32float: return float4{v.x, 0, 0, 1};
+        default: return v;
+        }
+    }
+    // load 8 bit sRGB encoded RGBA bytes, as Metal would upload them
+    void upload_rgba8(const uint8_t* b) {
+        for (size_t i = 0; i < px.size(); i++) {
+            float4 v{b[4 * i] / 255.0f, b[4 * i + 1] / 255.0f, b[4 * i + 2] / 255.0f, b[4 * i + 3] / 255.0f};
+            if (fmt == pixfmt::rgba8unorm_srgb) v = float4{srgb_to_linear(v.x), srgb_to_linear(v.y), srgb_to_linear(v.z), v.w};
+            px[i] = v;
+        }
+    }
+    void download_rgba8(uint8_t* b) const {
+        for (size_t i = 0; i < px.size(); i++) {
+            float4 v = px[i];
+            if (fmt == pixfmt::rgba8unorm_srgb) v = float4{linear_to_srgb(v.x), linear_to_srgb(v.y), linear_to_srgb(v.z), v.w};
+            for (int c = 0; c < 4; c++) b[4 * i + c] = uint8_t(std::nearbyint(q8(v[c]) * 255.0f));
+        }
+    }
+};
+
+template <class T, access A = access::sample> struct texture2d {
+    using V4 = std::conditional_t<std::is_same_v<T, half>, half4, float4>;
+    TexStore* s = nullptr;
+    texture2d() {}
+    texture2d(TexStore* t) : s(t) {}
+    template <access B> texture2d(const texture2d<T, B>& o) : s(o.s) {}
+    uint get_width(uint = 0) const { return uint(s->w); }
+    uint get_height(uint = 0) const { return uint(s->h); }
+    float4 fetch(int x, int y) const {
+        x = x < 0 ? 0 : (x >= s->w ? s->w - 1 : x);
+        y = y < 0 ? 0 : (y >= s->h ? s->h - 1 : y);
+        return s->px[size_t(y) * s->w + x];
+    }
+    V4 read(uint2 c, uint = 0) const { return cvt(fetch(int(c.x), int(c.y))); }
+    V4 read(int2 c, uint = 0) const { return cvt(fetch(c.x, c.y)); }
+    void write(float4 v, uint2 c, uint = 0) const {
+        if (c.x >= uint(s->w) || c.y >= uint(s->h)) return;
+        s->px[size_t(c.y) * s->w + c.x] = s->quantize(v);
+    }
+    void write(half4 v, uint2 c, uint = 0) const { write(make_vec<float4>(v), c); }
+    V4 sample(sampler sm, float2 uv) const {
+        float fx = uv.x, fy = uv.y;
+        if (sm.c == coord::normalized) { fx *= s->w; fy *= s->h; }
+        if (sm.f == filter::nearest) return cvt(texel(sm, int(std::floor(fx)), int(std::floor(fy))));
+        fx -= 0.5f; fy -= 0.5f;
+        float x0f = std::floor(fx), y0f = std::floor(fy);
+        int x0 = int(x0f), y0 = int(y0f);
+        float tx = fx - x0f, ty = fy - y0f;
+        float4 a = texel(sm, x0, y0), b = texel(sm, x0 + 1, y0);
+        float4 c = texel(sm, x0, y0 + 1), d = texel(sm, x0 + 1, y0 + 1);
+        float4 top = a + (b - a) * tx, bot = c + (d - c) * tx;
+        return cvt(top + (bot - top) * ty);
+    }
+    template <class L> V4 sample(sampler sm, float2 uv, L) const { return sample(sm, uv); }
+
+  private:
+    float4 texel(const sampler& sm, int x, int y) const {
+        if (sm.a == address::clamp_to_zero && (x < 0 || y < 0 || x >= s->w || y >= s->h)) return float4{0, 0, 0, 0};
+        if (sm.a == address::repeat) { x = ((x % s->w) + s->w) % s->w; y = ((y % s->h) + s->h) % s->h; }
+        return fetch(x, y);
+    }
+    static V4 cvt(float4 v) { if constexpr (std::is_same_v<V4, float4>) return v; else return make_vec<half4>(v); }
+};
+
+struct level { float l; explicit level(float v) : l(v) {} };
+
+}  // namespace metal
