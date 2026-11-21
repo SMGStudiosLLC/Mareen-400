@@ -912,7 +912,7 @@ final class MarennEngine {
         if (P.grainAmount > 0.0) {
             float4 g = grainField(int2(gid), P);
             float lv = lumv(v);
-            float push = 1.0 + 0.8 * P.grainPush * (1.0 - smoothstep(0.08, 0.5, lv));
+            float push = 1.0 + 0.6 * P.grainPush * (1.0 - smoothstep(0.08, 0.5, lv));
             float dense = 1.0 - 0.45 * smoothstep(0.55, 0.97, lv);    // dense negative, smoother print
             v += g.rgb * float3(P.grainR, P.grainG, P.grainB) * (P.grainAmount * push * dense);
         }

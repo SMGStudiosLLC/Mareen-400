@@ -58,6 +58,9 @@ jobs:
           .venv/bin/python Tools/cpu/compare.py ci-out/rooftop_extras_gpu.png ci-out/rooftop_extras_cpu.png || status=1
           exit $status
 
+      - name: Look regression checks (grain isotropy, on-screen consistency, determinism)
+        run: .venv/bin/python Tools/cpu/check_look.py
+
       - name: GPU timing at phone capture sizes
         run: |
           .venv/bin/python - <<'PY'
