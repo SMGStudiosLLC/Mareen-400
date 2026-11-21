@@ -609,13 +609,13 @@ final class MarennEngine {
     inline float digitDist(float2 p, int d) {
         int m = SEGMASK[clamp(d, 0, 9)];
         float r = 1e3;
-        if (m & 1)  r = min(r, capsule(p, float2(0.10, 1.00), float2(0.40, 1.00)));
-        if (m & 2)  r = min(r, capsule(p, float2(0.50, 0.90), float2(0.50, 0.60)));
-        if (m & 4)  r = min(r, capsule(p, float2(0.50, 0.40), float2(0.50, 0.10)));
-        if (m & 8)  r = min(r, capsule(p, float2(0.10, 0.00), float2(0.40, 0.00)));
-        if (m & 16) r = min(r, capsule(p, float2(0.00, 0.40), float2(0.00, 0.10)));
-        if (m & 32) r = min(r, capsule(p, float2(0.00, 0.90), float2(0.00, 0.60)));
-        if (m & 64) r = min(r, capsule(p, float2(0.10, 0.50), float2(0.40, 0.50)));
+        if ((m & 1) != 0)  r = min(r, capsule(p, float2(0.10, 1.00), float2(0.40, 1.00)));
+        if ((m & 2) != 0)  r = min(r, capsule(p, float2(0.50, 0.90), float2(0.50, 0.60)));
+        if ((m & 4) != 0)  r = min(r, capsule(p, float2(0.50, 0.40), float2(0.50, 0.10)));
+        if ((m & 8) != 0)  r = min(r, capsule(p, float2(0.10, 0.00), float2(0.40, 0.00)));
+        if ((m & 16) != 0) r = min(r, capsule(p, float2(0.00, 0.40), float2(0.00, 0.10)));
+        if ((m & 32) != 0) r = min(r, capsule(p, float2(0.00, 0.90), float2(0.00, 0.60)));
+        if ((m & 64) != 0) r = min(r, capsule(p, float2(0.10, 0.50), float2(0.40, 0.50)));
         return r;
     }
 
@@ -815,18 +815,19 @@ final class MarennEngine {
         float h = KX[i + 1] - KX[i];
         float t = (x - KX[i]) / h;
         float t2 = t * t, t3 = t2 * t;
-        return (2*t3 - 3*t2 + 1) * KY[i] + (t3 - 2*t2 + t) * h * KM[i]
-             + (-2*t3 + 3*t2) * KY[i + 1] + (t3 - t2) * h * KM[i + 1];
+        return (2.0 * t3 - 3.0 * t2 + 1.0) * KY[i] + (t3 - 2.0 * t2 + t) * h * KM[i]
+             + (-2.0 * t3 + 3.0 * t2) * KY[i + 1] + (t3 - t2) * h * KM[i + 1];
     }
 
     inline float3 hueRotate(float3 c, float ang) {
         float ca = cos(ang), sa = sin(ang);
         const float third = 1.0 / 3.0;
         float sq = sqrt(third);
+        float k = 1.0 - ca;
         float3x3 m = float3x3(
-            float3(ca + (1 - ca) * third, third * (1 - ca) + sq * sa, third * (1 - ca) - sq * sa),
-            float3(third * (1 - ca) - sq * sa, ca + third * (1 - ca), third * (1 - ca) + sq * sa),
-            float3(third * (1 - ca) + sq * sa, third * (1 - ca) - sq * sa, ca + third * (1 - ca)));
+            float3(ca + k * third, third * k + sq * sa, third * k - sq * sa),
+            float3(third * k - sq * sa, ca + third * k, third * k + sq * sa),
+            float3(third * k + sq * sa, third * k - sq * sa, ca + third * k));
         return m * c;
     }
 

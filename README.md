@@ -101,6 +101,25 @@ python3 Tools/cpu/marenn.py beach.jpg out.png --stamp 2026-11-21
 
 It is exact enough to trust: on Apple silicon the GPU and CPU renders of the examples differ by 0.03 to 0.06 levels on average, never more than 1.
 
+## In the browser (WebGL2)
+
+`Tools/web` runs the same filter in a browser. `msl2glsl.py` translates the Metal source in `MarennFilter.swift` into GLSL, so the web version cannot drift from the app, and `marenn-gl.js` mirrors the Swift host code:
+
+```
+python3 Tools/web/msl2glsl.py MarennFilter.swift Tools/web/marenn-shaders.js
+```
+
+```html
+<script src="marenn-shaders.js"></script>
+<script src="marenn-gl.js"></script>
+<script>
+  const out = new MarennGL().develop(imageData, { seed: 42, dateStamp: new Date() });
+  // out.data is RGBA bytes, out.width / out.height its size
+</script>
+```
+
+Checked in headless Chromium against the CPU reference on the rooftop and surf examples and the date imprint and light leak case: mean difference 0.000 levels, never more than 1. It has not yet been run on a real GPU, and there is no CI job for it.
+
 ## Use it in an app
 
 `MarennFilter.swift` targets iOS (UIKit in, UIKit out):
@@ -121,6 +140,7 @@ Every push runs `.github/workflows/validate.yml` on a macOS runner. It compiles 
 MarennFilter.swift      the filter, Swift host code + embedded Metal source
 Tools/marenn_cli.swift  macOS command line tool, built together with the filter
 Tools/cpu/              CPU reference renderer for machines without Metal
+Tools/web/              WebGL2 port, generated from the Metal source
 Examples/               before and after samples used in this README
 LICENSE                 GPL-3.0
 ```
