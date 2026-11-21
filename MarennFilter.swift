@@ -411,8 +411,11 @@ final class MarennEngine {
         enc.setComputePipelineState(pso)
         for (i, t) in textures.enumerated() { enc.setTexture(t, index: i) }
         uniforms(enc)
-        let tg = MTLSize(width: 16, height: 16, depth: 1)
-        let groups = MTLSize(width: (w + 15) / 16, height: (h + 15) / 16, depth: 1)
+        // heavy kernels can get a lower thread limit on some GPUs, so size from the pipeline
+        let tw = max(1, pso.threadExecutionWidth)
+        let th = max(1, min(8, pso.maxTotalThreadsPerThreadgroup / tw))
+        let tg = MTLSize(width: tw, height: th, depth: 1)
+        let groups = MTLSize(width: (w + tw - 1) / tw, height: (h + th - 1) / th, depth: 1)
         enc.dispatchThreadgroups(groups, threadsPerThreadgroup: tg)
         enc.endEncoding()
     }

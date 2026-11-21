@@ -58,6 +58,18 @@ jobs:
           .venv/bin/python Tools/cpu/compare.py ci-out/rooftop_extras_gpu.png ci-out/rooftop_extras_cpu.png || status=1
           exit $status
 
+      - name: GPU timing at phone capture sizes
+        run: |
+          .venv/bin/python - <<'PY'
+          from PIL import Image
+          im = Image.open("Examples/original-rooftop.jpg").convert("RGB")
+          im.resize((3024, 4032), Image.LANCZOS).save("ci-in/12mp.png")
+          im.resize((4284, 5712), Image.LANCZOS).save("ci-in/24mp.png")
+          PY
+          for n in 12mp 24mp; do
+            for run in 1 2 3; do ./marenn ci-in/$n.png ci-out/timing_$n.jpg --seed 1; done
+          done
+
       - uses: actions/upload-artifact@v4
         if: always()
         with:
