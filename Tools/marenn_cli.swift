@@ -31,7 +31,7 @@ struct MarennCLI {
         "vigMech": \.vigMech, "softGlobal": \.softGlobal, "onset": \.onset, "defocusK": \.defocusK,
         "defocusP": \.defocusP, "aniso": \.aniso, "coma": \.coma, "axialR": \.axialR, "axialB": \.axialB,
         "caOnset": \.caOnset, "caK": \.caK, "caB": \.caB, "caP": \.caP, "hiBoost": \.hiBoost,
-        "exposure": \.exposure, "halThreshold": \.halThreshold, "halKnee": \.halKnee,
+        "exposure": \.exposure, "dimWarmth": \.dimWarmth, "halThreshold": \.halThreshold, "halKnee": \.halKnee,
         "halIntensity": \.halIntensity, "halR": \.halR, "halG": \.halG, "halB": \.halB,
         "veilAmount": \.veilAmount, "bloomI": \.bloomI, "warmGlow": \.warmGlow, "softAmt": \.softAmt, "hiE0": \.hiE0, "hiE1": \.hiE1,
         "grainAmount": \.grainAmount, "grainSigma": \.grainSigma, "mottleMix": \.mottleMix,

@@ -77,7 +77,7 @@ struct MarennParams {
     var gainB: Float = 1
 
     // plastic lens
-    var distortion: Float = 0.018      // barrel, corners kept in frame
+    var distortion: Float = 0.012      // a hint of barrel (about 1%), corners kept in frame
     var vigAmount: Float = 0.72        // blend toward natural cos^4 falloff
     var vigTanHalfFov: Float = 0.676   // 32 mm lens on a 36 x 24 mm frame
     var vigMech: Float = 0.10          // extra darkening right in the corners
@@ -95,6 +95,7 @@ struct MarennParams {
     var caP: Float = 1.25
     var hiBoost: Float = 1.5           // clipped light sources glow like the bright things they were
     var exposure: Float = 0.92         // linear trim so the optics land on the measured print density
+    var dimWarmth: Float = 0.06        // film has no white balance: lamp-lit dim scenes go amber
 
     // halation, veiling glare, highlight diffusion
     var halThreshold: Float = 0.55
@@ -111,7 +112,7 @@ struct MarennParams {
     var hiE1: Float = 0.80
 
     // grain
-    var grainAmount: Float = 0.019     // std before the print curve, for a 3024 px short side
+    var grainAmount: Float = 0.022     // std before the print curve, for a 3024 px short side
     var grainSigma: Float = 0.85       // dye cloud size in px at a 3024 px short side
     var grainRadius: Float = 2         // per photo
     var grainNorm: Float = 1           // per photo
@@ -305,9 +306,12 @@ final class MarennEngine {
         let warmDrift = (rng.unit() * 2 - 1) * 0.018 * v         // lab printing colour drift
         let tintDrift = (rng.unit() * 2 - 1) * 0.010 * v
         let g = powf(encodedGain, 2.2) * powf(2, expDrift) * base.exposure
-        p.gainR = g * (1 + warmDrift)
-        p.gainG = g * (1 + tintDrift)
-        p.gainB = g * (1 - warmDrift)
+        // dim frames were lit by lamps the film never balanced for
+        let dim = max(0, min(1, (0.30 - stats.p50) / 0.20))
+        let amber = base.dimWarmth * dim
+        p.gainR = g * (1 + warmDrift) * (1 + amber)
+        p.gainG = g * (1 + tintDrift) * (1 + 0.25 * amber)
+        p.gainB = g * (1 - warmDrift) * (1 - 1.2 * amber)
 
         // grain: sized to the frame, so a preview and a full capture look alike on screen
         let scale = p.minDim / 3024
@@ -334,7 +338,7 @@ final class MarennEngine {
             / (Float.pi * p.mottleSigma * p.mottleSigma / (3 * p.mottleCell * p.mottleCell)).squareRoot()
         p.grainAmount = options.grain ? base.grainAmount : 0
         // dim scenes were underexposed on the real roll, the lab printed them up, grain came along
-        p.grainPush = max(0, min(1, (0.30 - stats.p50) / 0.20))
+        p.grainPush = dim
 
         if let date = options.dateStamp {
             let c = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: date)
@@ -502,7 +506,7 @@ final class MarennEngine {
         float softGlobal, onset, defocusK, defocusP;
         float aniso, coma, axialR, axialB;
         float caOnset, caK, caB, caP;
-        float hiBoost, exposure;
+        float hiBoost, exposure, dimWarmth;
         float halThreshold, halKnee, halIntensity, halR, halG, halB;
         float veilAmount, bloomI, warmGlow, softAmt, hiE0, hiE1;
         float grainAmount, grainSigma, grainRadius, grainNorm;

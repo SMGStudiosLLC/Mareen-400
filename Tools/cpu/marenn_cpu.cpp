@@ -81,9 +81,11 @@ static MarennParams frame_params(MarennParams p, int w, int h, Stats st, const O
     float warmDrift = (rng.unit() * 2 - 1) * 0.018f * v;
     float tintDrift = (rng.unit() * 2 - 1) * 0.010f * v;
     float g = std::pow(encGain, 2.2f) * std::pow(2.0f, expDrift) * base.exposure;
-    p.gainR = g * (1 + warmDrift);
-    p.gainG = g * (1 + tintDrift);
-    p.gainB = g * (1 - warmDrift);
+    float dim = std::max(0.0f, std::min(1.0f, (0.30f - st.p50) / 0.20f));
+    float amber = base.dimWarmth * dim;
+    p.gainR = g * (1 + warmDrift) * (1 + amber);
+    p.gainG = g * (1 + tintDrift) * (1 + 0.25f * amber);
+    p.gainB = g * (1 - warmDrift) * (1 - 1.2f * amber);
 
     float scale = p.minDim / 3024;
     float sigmaRaw = base.grainSigma * scale;
@@ -104,7 +106,7 @@ static MarennParams frame_params(MarennParams p, int w, int h, Stats st, const O
     p.mottleNorm = pixel_integral(mottleRaw) / pixel_integral(p.mottleSigma) /
                    std::sqrt(float(M_PI) * p.mottleSigma * p.mottleSigma / (3 * p.mottleCell * p.mottleCell));
     p.grainAmount = o.grain ? base.grainAmount : 0;
-    p.grainPush = std::max(0.0f, std::min(1.0f, (0.30f - st.p50) / 0.20f));
+    p.grainPush = dim;
 
     if (o.stampOn) {
         int yy = o.yy % 100, mm = o.mm, dd = o.dd;
