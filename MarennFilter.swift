@@ -104,6 +104,8 @@ struct MarennParams {
     var halG: Float = 0.40
     var halB: Float = 0.14
     var veilAmount: Float = 0.028
+    var bloomI: Float = 0.10           // measured print bloom: highlights glow into their surroundings
+    var warmGlow: Float = 0.18         // measured warm glow of bright areas on the print
     var softAmt: Float = 0.45
     var hiE0: Float = 0.42
     var hiE1: Float = 0.80
@@ -260,9 +262,11 @@ final class MarennEngine {
             coarseScale = SIMD4<Float>(repeating: 1)
         }
         let glow = ups.isEmpty ? levels[0] : ups[0]
+        // the print bloom wants a blur of about 1/80 of the frame: fourth level from the top
+        let bloomLevel = levels[max(0, levels.count - 4)]
 
         // 4. film: halation, veil, grain, print
-        encode(cmd, filmPSO, w, h, textures: [lensTex, glow, outTex]) {
+        encode(cmd, filmPSO, w, h, textures: [lensTex, glow, bloomLevel, outTex]) {
             $0.setBytes(&p, length: plen, index: 0)
         }
 
@@ -500,7 +504,7 @@ final class MarennEngine {
         float caOnset, caK, caB, caP;
         float hiBoost, exposure;
         float halThreshold, halKnee, halIntensity, halR, halG, halB;
-        float veilAmount, softAmt, hiE0, hiE1;
+        float veilAmount, bloomI, warmGlow, softAmt, hiE0, hiE1;
         float grainAmount, grainSigma, grainRadius, grainNorm;
         float mottleCell, mottleSigma, mottleNorm, mottleMix;
         float grainChroma, grainR, grainG, grainB;
@@ -853,7 +857,8 @@ final class MarennEngine {
 
     kernel void marenn_film(texture2d<float, access::sample> lens [[texture(0)]],
                             texture2d<float, access::sample> glow [[texture(1)]],
-                            texture2d<float, access::write> dst [[texture(2)]],
+                            texture2d<float, access::sample> bloom [[texture(2)]],
+                            texture2d<float, access::write> dst [[texture(3)]],
                             constant MarennParams& P [[buffer(0)]],
                             uint2 gid [[thread_position_in_grid]]) {
         uint W = dst.get_width(), H = dst.get_height();
@@ -906,6 +911,17 @@ final class MarennEngine {
         }
 
         float3 c = grade(v, P);
+
+        // print bloom and warm glow, measured on real prints: bright areas lift and warm what
+        // surrounds them. Screened on in print space, from a softly upsampled mid pyramid level.
+        float2 bt = 0.5 / float2(bloom.get_width(), bloom.get_height());
+        float3 wideL = 0.25 * (bloom.sample(smp, uv + float2(-bt.x, -bt.y)).rgb + bloom.sample(smp, uv + float2(bt.x, -bt.y)).rgb
+                             + bloom.sample(smp, uv + float2(-bt.x, bt.y)).rgb + bloom.sample(smp, uv + float2(bt.x, bt.y)).rgb);
+        float3 wide = grade(encodeSRGB(wideL), P);
+        float lw = lumv(wide);
+        float3 bloomS = wide * smoothstep(0.55, 0.95, lw) * P.bloomI;
+        float3 warmS = wide * clamp((lw - 0.62) / 0.38, 0.0, 1.0) * float3(1.0, 0.60, 0.32) * P.warmGlow;
+        c = 1.0 - (1.0 - c) * (1.0 - clamp(bloomS, 0.0, 1.0)) * (1.0 - clamp(warmS, 0.0, 1.0));
 
         // triangular dither so smooth skies never band at 8 bits
         float4 n = rand4(int2(gid), uint(P.seed), 7u);

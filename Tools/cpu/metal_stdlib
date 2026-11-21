@@ -76,8 +76,12 @@ template <class V, class A> inline V splat(const A& a) {
 }
 
 // ---- elementwise math ---------------------------------------------------------
+// Scalar overloads are templates on purpose: libc++ declares float sqrt(float) and
+// friends in the global namespace, and a plain function here would be ambiguous with
+// them once the shader says `using namespace metal`. A template loses the tie.
 #define MSL_UNARY(NAME, EXPR)                                                         \
-    inline float NAME(float x) { return (EXPR); }                                     \
+    template <class S, std::enable_if_t<std::is_same_v<S, float>, int> = 0>           \
+    inline float NAME(S x) { return (EXPR); }                                         \
     template <class V, std::enable_if_t<is_vec_v<V>, int> = 0> inline V NAME(V v) {  \
         V r; for (int i = 0; i < vinfo<V>::n; i++) { float x = v[i]; r[i] = (EXPR); } \
         return r; }
@@ -105,8 +109,7 @@ MSL_UNARY(saturate, x < 0.0f ? 0.0f : (x > 1.0f ? 1.0f : x))
 MSL_UNARY(sign, x > 0.0f ? 1.0f : (x < 0.0f ? -1.0f : 0.0f))
 #undef MSL_UNARY
 
-inline float abs(float x) { return std::fabs(x); }
-inline int abs(int x) { return x < 0 ? -x : x; }
+template <class S, std::enable_if_t<std::is_arithmetic_v<S>, int> = 0> inline S abs(S x) { return x < 0 ? -x : x; }
 template <class V, std::enable_if_t<is_vec_v<V>, int> = 0> inline V abs(V v) {
     V r; for (int i = 0; i < vinfo<V>::n; i++) r[i] = v[i] < 0 ? -v[i] : v[i]; return r;
 }
@@ -172,8 +175,8 @@ template <class C, class V> inline V select(V a, V b, C c) {
 }
 template <class V> inline bool any(V v) { for (int i = 0; i < vinfo<V>::n; i++) if (v[i]) return true; return false; }
 template <class V> inline bool all(V v) { for (int i = 0; i < vinfo<V>::n; i++) if (!v[i]) return false; return true; }
-inline bool isnan(float x) { return std::isnan(x); }
-inline bool isinf(float x) { return std::isinf(x); }
+template <class S, std::enable_if_t<std::is_same_v<S, float>, int> = 0> inline bool isnan(S x) { return std::isnan(x); }
+template <class S, std::enable_if_t<std::is_same_v<S, float>, int> = 0> inline bool isinf(S x) { return std::isinf(x); }
 
 template <class T, class U> inline T as_type(const U& u) {
     static_assert(sizeof(T) == sizeof(U), "as_type size mismatch");

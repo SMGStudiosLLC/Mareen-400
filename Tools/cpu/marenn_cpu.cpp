@@ -204,7 +204,8 @@ extern "C" int marenn_process(const uint8_t* in, int w, int h, uint8_t* out, uin
         coarseScale = float4{1, 1, 1, 1};
     }
     TexStore* glow = ups.empty() ? &levels[0] : &ups[0];
-    dispatch(w, h, [&](uint2 id) { marenn_film(&lensT, glow, &outT, p, id); });
+    TexStore* bloomLevel = &levels[std::max(0, n - 4)];
+    dispatch(w, h, [&](uint2 id) { marenn_film(&lensT, glow, bloomLevel, &outT, p, id); });
     outT.download_rgba8(out);
     return 0;
 }

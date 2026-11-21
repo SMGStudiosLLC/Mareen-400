@@ -33,7 +33,7 @@ struct MarennCLI {
         "caOnset": \.caOnset, "caK": \.caK, "caB": \.caB, "caP": \.caP, "hiBoost": \.hiBoost,
         "exposure": \.exposure, "halThreshold": \.halThreshold, "halKnee": \.halKnee,
         "halIntensity": \.halIntensity, "halR": \.halR, "halG": \.halG, "halB": \.halB,
-        "veilAmount": \.veilAmount, "softAmt": \.softAmt, "hiE0": \.hiE0, "hiE1": \.hiE1,
+        "veilAmount": \.veilAmount, "bloomI": \.bloomI, "warmGlow": \.warmGlow, "softAmt": \.softAmt, "hiE0": \.hiE0, "hiE1": \.hiE1,
         "grainAmount": \.grainAmount, "grainSigma": \.grainSigma, "mottleMix": \.mottleMix,
         "grainChroma": \.grainChroma, "grainR": \.grainR, "grainG": \.grainG, "grainB": \.grainB,
         "satGlobal": \.satGlobal, "blueSatK": \.blueSatK, "blueSatT0": \.blueSatT0,
